@@ -1,6 +1,6 @@
 #include <reg52.h>
 #include "mouse.h"
-
+//第一次修改
 sbit beep = P2 ^ 4;//找到蜂鸣器的地址位
 bit ir = 0;//标志中断时发射还是接收
 unsigned char num_G = 0;//标记这次发射红外光的LED管
