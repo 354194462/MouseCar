@@ -1,5 +1,5 @@
 #include <reg52.h>
-#include "mouse.h"//嘻嘻嘻
+#include "mouse.h"//嘻嘻嘻啊
 
 sbit beep = P2 ^ 4;//找到蜂鸣器的地址位
 bit ir = 0;//标志中断时发射还是接收
