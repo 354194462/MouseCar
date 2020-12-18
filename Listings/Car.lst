@@ -1,0 +1,696 @@
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 1   
+
+
+C51 COMPILER V9.55, COMPILATION OF MODULE CAR
+OBJECT MODULE PLACED IN .\Objects\Car.obj
+COMPILER INVOKED BY: E:\keil\C51\BIN\C51.EXE Car.c LARGE OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\Ca
+                    -r.lst) OBJECT(.\Objects\Car.obj)
+
+line level    source
+
+   1          #include <reg52.h>
+   2          #include "mouse.h"
+   3          
+   4          sbit beep = P2 ^ 4;//找到蜂鸣器的地址位
+   5          bit ir = 0;//标志中断时发射还是接收
+   6          unsigned char num_G = 0;//标记这次发射红外光的LED管
+   7          const unsigned  int code forward[] = { 0x11,0x33,0x22,0x66,0x44,0xcc,0x88,0x99 };//电机正转周期
+   8          const unsigned  int code reverse[] = { 0x11,0x99,0x88,0xcc,0x44,0x66,0x22,0x33 };//电机反转周期
+   9          unsigned char map[8][8];//定义迷宫的8*8小方格 高四位记录进入迷宫小方格的方向 低四
+             -位记录迷宫小方格的挡板情况
+  10          unsigned char i, j;//循环体变量
+  11          unsigned char CarTurn_Dir = 0;//定义小车的转动方向
+  12          unsigned char CarReal_Dir = 0;//定义小车的绝对方向
+  13          unsigned char num_StackNow = 0;//记录小车在建立地图的等高表时所确定的队的目前位置
+  14          unsigned char num_Stack = 0;//记录栈中坐标的个数
+  15          unsigned char stackX[64], stackY[64];//使用数组模拟栈的效果，stackX记录岔路口的x坐标,st
+             -ackY记录岔路口的y坐标
+  16          unsigned char mapFlag[8][8];//每个迷宫都有一个变量来记录迷宫方格的状态：0未走过 1�
+             -��过
+  17          unsigned char dirNum = 0; //记录每个迷宫方格周围可以同行的方向的数量，来判断这个
+             -迷宫方格是否是岔路口
+  18          
+  19          void InitMap();//迷宫方格的初始化函数
+  20          void InitMapFlag();//迷宫方格标记的初始化函数
+  21          void InitStack();//迷宫数组（栈、队列）的初始化
+  22          void InitTime2();//定时器T2初始化
+  23          void JudgeMap_byRed();//通过红外线检测迷宫方格周围的挡板情况，并记录到map[][]的低
+             -四位中
+  24          void JudgeMap_byDir();//通过小车的绝对方向来赋给下一个位置的通过迷宫小方格方向�
+             -��并记录到map[][]的高四位中
+  25          void WorkForFork();//对没有走过的岔路口作出相应的处理
+  26          void SearchMode0();//右手法则
+  27          void SearchMode1();//左手法则
+  28          void SearchMode2();//中左法则
+  29          void SearchMode3();//中右法则
+  30          void DrawHeightMap();//画出地图的等高图
+  31          void MakeRushMap();//制作冲刺路线
+  32          void CarRush();//小车的最后冲刺
+  33          void WorkForEnd();//对小车处在死胡同或者终点（没有遍历完地图）做出相应的处理
+  34          char CarRegional();//判断小车所在的位置区域
+  35          
+  36          void Delay_ms(int time);//延时函数
+  37          void Search_Mode(int data_car);//最终的小车的行走策略
+  38          void DriveCar(int Dir);//驱动小车函数
+  39          void PostureFix(int Dir);//小车的姿势修复
+  40          void GetReal_Dir(int Dir);//获取小车的绝对方向
+  41          void GetReal_Pos(int Dir);//获取小车的位置
+  42          void PlaySound(int time);//蜂鸣器发声
+  43          void SetTime2(unsigned int);//设置T2自动重载寄存器和计数器初值
+  44          
+  45          struct mouseCar
+  46          {
+  47                  unsigned int x; 
+  48                  unsigned int y;
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 2   
+
+  49          };//定义小车的结构体
+  50          struct mouseCar Car = {0,0};//定义小车的单例
+  51          //主函数
+  52          void main()
+  53          {
+  54   1              InitTime2();
+  55   1              InitMap();
+  56   1              InitMapFlag();
+  57   1              InitStack();
+  58   1              //功能1：从指定起点开始在迷宫中行走，找到指定终点
+  59   1              while (!(Car.x == 7 && Car.y == 7))
+  60   1              {
+  61   2                       /*
+  62   2                       * 判断小车所在位置以及所在位置的的挡板情况
+  63   2                       * 如果小车所在的位置是岔路口，则将岔路口压入栈
+  64   2                       * 如果小车所在的位置是终点（未遍历完所有路线）或者死胡同，则小车将回�
+             -�最近的岔路口从新开始行走
+  65   2                       * 如果小车所在的位置既不是岔路口，也不是死胡同或者终点，那么直接按照�
+             -�路策略驱动小车行走
+  66   2                       */
+  67   2                      
+  68   2                      if (dirNum > 1 && mapFlag[Car.x][Car.y] == 0)
+  69   2                              WorkForFork();
+  70   2                      else  if (dirNum == 0 || ((Car.x == 7 && Car.y == 7) && num_Stack != 0))
+  71   2                              WorkForEnd();
+  72   2                      mapFlag[Car.x][Car.y] = 1;//将当前小车所处在的迷宫方格标记为1
+  73   2                      DriveCar(CarTurn_Dir);//驱动小车行走
+  74   2              }
+  75   1              //功能2：小车从终点开始遍历迷宫返回起点，寻找最短路径
+  76   1              InitMap();
+  77   1              InitMapFlag();
+  78   1              InitStack();
+  79   1              num_Stack = 0;
+  80   1              while (!(Car.x == 0 && Car.x == 0 && num_Stack == 0))
+  81   1              {
+  82   2                      JudgeMap_byDir();
+  83   2                      JudgeMap_byRed();
+  84   2                      Search_Mode(CarRegional());//按照制订好的寻路策略来确定小车的行走方向
+  85   2                      GetReal_Dir(CarTurn_Dir);//获取小车的绝对行走方向
+  86   2                      GetReal_Pos(CarReal_Dir);//获取小车的绝对位置
+  87   2                      JudgeMap_byRed();
+  88   2                      if (dirNum > 1 && mapFlag[Car.x][Car.y] == 0)
+  89   2                              WorkForFork();
+  90   2                      else  if (dirNum == 0 || ((Car.x == 7 && Car.y == 7) && num_Stack != 0))
+  91   2                              WorkForEnd();
+  92   2                      mapFlag[Car.x][Car.y] = 1;//将当前小车所处在的迷宫方格标记为1
+  93   2                      DriveCar(CarTurn_Dir);//驱动小车行走
+  94   2              }
+  95   1              //功能3：根据最短路径冲刺到终点
+  96   1      
+  97   1              /*将地图的同一高度的地图方块进队，坐标存贮到队列中，等待下一次搜索时出�
+             -��
+  98   1              * 如果同一高度的节点全部进队，那么下次入队的地图方块高度数加一
+  99   1              * 标记进队的地图方块，下次搜索到该方块时高度数不改变
+ 100   1              * 如果找到起点，那么终止搜索，画出等高表
+ 101   1              */
+ 102   1      
+ 103   1              DrawHeightMap();
+ 104   1      
+ 105   1              /*
+ 106   1              * 利用等高表，从起点出发，每次找比上一个地图方块高度数小一的的地图方块
+ 107   1              * 记录冲刺的的每个地图方块的方向，记录到数组中
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 3   
+
+ 108   1              * 小车冲刺到终点
+ 109   1              * 
+ 110   1              */
+ 111   1      
+ 112   1              MakeRushMap();
+ 113   1              CarRush();
+ 114   1      
+ 115   1      
+ 116   1              //功能3：小车回到起点后蜂鸣器发出声音
+ 117   1              PlaySound(10);
+ 118   1              while (1);//无限循环，防止单片机跑飞
+ 119   1      }
+ 120          //延时函数
+ 121          void Delay_ms(int time)
+ 122          {
+ 123   1              for (i = time; i > 0; i--)
+ 124   1                      for (j = 0; j < 100; j++);
+ 125   1      }
+ 126          //初始化地图
+ 127          void InitMap()
+ 128          {
+ 129   1              for(i = 0; i < 8; i ++)
+ 130   1                      for (j = 0; j < 8; j++)
+ 131   1                      {
+ 132   2                              map[i][j] = 0xff;
+ 133   2                      }
+ 134   1      }
+ 135          //初始化地图标记
+ 136          void InitMapFlag()
+ 137          {
+ 138   1              for(i = 0; i < 8; i++)
+ 139   1                      for (j = 0; j < 8; j++)
+ 140   1                      {
+ 141   2                              mapFlag[i][j] = 0;
+ 142   2                      }
+ 143   1      }
+ 144          //初始化栈、队列
+ 145          void InitStack()
+ 146          {
+ 147   1              for (i = 0; i < 64; i++)
+ 148   1              {
+ 149   2                      stackX[i] = 0;
+ 150   2                      stackY[i] = 0;
+ 151   2              }
+ 152   1      }
+ 153          //判断地图方格周围的挡板情况
+ 154          void JudgeMap_byRed()
+ 155          {
+ 156   1              if (!irC) { dirNum++; map[Car.x][Car.y] = map[Car.x][Car.y] & 0xf7; }//如果正前方没有挡板，那�
+             -��挡板数加一，改变迷宫的低四位
+ 157   1              else if (!irR) { dirNum++; map[Car.x][Car.y] = map[Car.x][Car.y] & 0xfb; }//如果右前方没有挡板
+ 158   1              else if (!irL) { dirNum++; map[Car.x][Car.y] = map[Car.x][Car.y] & 0xfd; }//如果左前方没有挡板
+ 159   1      
+ 160   1              if (irLU && !irC)
+ 161   1                      PostureFix(0);
+ 162   1              else if (irRU && !irC)
+ 163   1                      PostureFix(1);
+ 164   1      
+ 165   1      }
+ 166          //判断地图方格的通过方向
+ 167          void JudgeMap_byDir()
+ 168          {
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 4   
+
+ 169   1              switch (CarTurn_Dir)
+ 170   1              {
+ 171   2              case 0:map[Car.x][Car.y + 1] = map[Car.x][Car.y] & 0x7f;
+ 172   2              case 1:map[Car.x + 1][Car.y] = map[Car.x][Car.y] & 0xbf;
+ 173   2              case 2:map[Car.x][Car.y - 1] = map[Car.x][Car.y] & 0xdf;
+ 174   2              case 3:map[Car.x - 1][Car.y] = map[Car.x][Car.y] & 0xef;
+ 175   2              default:break;
+ 176   2              }
+ 177   1      
+ 178   1      }
+ 179          //获得小车的绝对方向
+ 180          void GetReal_Dir(int Dir)
+ 181          {
+ 182   1              CarReal_Dir = (CarReal_Dir + Dir) % 4;
+ 183   1      }
+ 184          //获得小车的位置
+ 185          void GetReal_Pos(int Dir)
+ 186          {
+ 187   1              switch (Dir)
+ 188   1              {
+ 189   2              case 0:Car.y += 1; break;
+ 190   2              case 1:Car.x += 1; break;
+ 191   2              case 2:Car.y -= 1; break;
+ 192   2              case 3:Car.x -= 1; break;
+ 193   2              default:break;
+ 194   2              }
+ 195   1      
+ 196   1      }
+ 197          //对没有走过的岔路口做出相应的处理
+ 198          void WorkForFork()
+ 199          {
+ 200   1              stackX[num_Stack] = Car.x;
+ 201   1              stackY[num_Stack] = Car.y;//将岔路口的坐标压入栈（数组）中
+ 202   1              num_Stack++;//栈的长度+1
+ 203   1      }
+ 204          //对死胡同做出相应的处理（未完成对回溯路径的处理）
+ 205          void WorkForEnd()
+ 206          {
+ 207   1              //回溯到最近的一个岔路口
+ 208   1              while (!(Car.x == stackX[num_Stack - 1] && Car.y == stackY[num_Stack - 1]))
+ 209   1              {
+ 210   2                      switch (map[Car.x][Car.y] / 16)
+ 211   2                      {
+ 212   3                              //假如进来时朝前,则回去时朝后
+ 213   3                      case 7:CarTurn_Dir = 2; break;
+ 214   3                              //假如进来时朝右，则回去时朝左
+ 215   3                      case 11:CarTurn_Dir = 3; break;
+ 216   3                              //假如进来时朝后，则回去时朝前
+ 217   3                      case 13:CarTurn_Dir = 0; break;
+ 218   3                              //假如进来时朝左，则回去时朝右
+ 219   3                      case 15:CarTurn_Dir = 1; break;
+ 220   3                      }
+ 221   2                      DriveCar(CarTurn_Dir);
+ 222   2              }
+ 223   1              num_Stack--;//栈的长度减一
+ 224   1      
+ 225   1      }
+ 226          //电机驱动函数
+ 227          void DriveCar(int Dir)
+ 228          {
+ 229   1              JudgeMap_byDir();//判断小车的绝对方向
+ 230   1              JudgeMap_byRed();//判断小车的所在位置的挡板情况
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 5   
+
+ 231   1              Search_Mode(CarRegional());//按照制订好的寻路策略来确定小车的行走方向
+ 232   1              GetReal_Dir(CarTurn_Dir);//获取小车的绝对行走方向
+ 233   1              GetReal_Pos(CarReal_Dir);//获取小车的绝对位置
+ 234   1              JudgeMap_byRed();
+ 235   1              //判断小车的行走方向
+ 236   1              switch (Dir)
+ 237   1              {
+ 238   2                      //如果向前走
+ 239   2              case 0: {
+ 240   3                      for (j = 0; j < 110; j++)
+ 241   3                      {
+ 242   4                              for (i = 0; i < 8; i++)
+ 243   4                              {
+ 244   5                                      P1 = forward[i];
+ 245   5                                      Delay_ms(3);
+ 246   5                              }
+ 247   4                      }
+ 248   3              }break;
+ 249   2                      //如果向右走
+ 250   2              case 1: {
+ 251   3                      for (j = 0; j < 55; j++)
+ 252   3                      {
+ 253   4                              for (i = 0; i < 8; i++)
+ 254   4                              {
+ 255   5                                      P1 = (forward[i] | 0xf0);
+ 256   5                                      Delay_ms(3);
+ 257   5                              }
+ 258   4                      }
+ 259   3                      for (j = 0; j < 55; j++)
+ 260   3                      {
+ 261   4                              for (i = 0; i < 8; i++)
+ 262   4                              {
+ 263   5                                      P1 = (reverse[i] | 0x0f);
+ 264   5                                      Delay_ms(3);
+ 265   5                                              
+ 266   5                              }
+ 267   4                      }
+ 268   3              }
+ 269   2                        //如果向后走
+ 270   2              case 2: {
+ 271   3                      for (j = 0; j < 110; j++)
+ 272   3                      {
+ 273   4                              for (i = 0; i < 8; i++)
+ 274   4                              {
+ 275   5                                      P1 = reverse[i];
+ 276   5                              }
+ 277   4                      }
+ 278   3              }
+ 279   2                        //如果向左走
+ 280   2              case 3: {
+ 281   3                      for (j = 0; j < 55; j++)
+ 282   3                      {
+ 283   4                              for (i = 0; i < 8; i++)
+ 284   4                              {
+ 285   5                                      P1 = (reverse[i] | 0xf0);
+ 286   5                                      Delay_ms(3);
+ 287   5                              }
+ 288   4                      }
+ 289   3                      for (j = 0; j < 55; j++)
+ 290   3                      {
+ 291   4                              for (i = 0; i < 8; i++)
+ 292   4                              {
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 6   
+
+ 293   5                                      P1 = (forward[i] | 0x0f);
+ 294   5                                      Delay_ms(3);
+ 295   5      
+ 296   5                              }
+ 297   4                      }
+ 298   3              }
+ 299   2              default:break;
+ 300   2              }
+ 301   1      }
+ 302          //小车的姿势修复
+ 303          void PostureFix(int Dir)
+ 304          {
+ 305   1              if (Dir == 0)//如果小车方向往左偏移，那么小车适当向右偏转
+ 306   1              {
+ 307   2                      while (irLU)
+ 308   2                              DriveCar(1);
+ 309   2              }
+ 310   1              else if(Dir == 1)//如果小车方向往右偏转，那么小车适当向左偏转
+ 311   1              {
+ 312   2                      while (irRU)
+ 313   2                              DriveCar(3);
+ 314   2              }
+ 315   1      }
+ 316          //右手法则
+ 317          void SearchMode0()
+ 318          {
+ 319   1              //如果可以向右转，则向右转
+ 320   1              if (map[Car.x][Car.y] | 0xfb == 0xfb)
+ 321   1              {
+ 322   2                      CarTurn_Dir = 1;
+ 323   2                      return;
+ 324   2              }
+ 325   1      
+ 326   1              //如果可以向前转，则向前转
+ 327   1              else if (map[Car.x][Car.y] | 0xf7 == 0xf7)
+ 328   1              {
+ 329   2                      CarTurn_Dir = 0;
+ 330   2                      return;
+ 331   2              }
+ 332   1      
+ 333   1              //如果可以向左转，则向左转
+ 334   1              else if (map[Car.x][Car.y] | 0xfe == 0xfe)
+ 335   1              {
+ 336   2                      CarTurn_Dir = 3;
+ 337   2                      return;
+ 338   2              }
+ 339   1      
+ 340   1      }
+ 341          //左手法则
+ 342          void SearchMode1()
+ 343          {
+ 344   1              //如果可以向左转，则向左转
+ 345   1              if (map[Car.x][Car.y] | 0xfe == 0xfe)
+ 346   1              {
+ 347   2                      CarTurn_Dir = 3;
+ 348   2                      return;
+ 349   2              }
+ 350   1      
+ 351   1              //如果可以向前转，则向前转
+ 352   1              else if (map[Car.x][Car.y] | 0xf7 == 0xf7)
+ 353   1              {
+ 354   2                      CarTurn_Dir = 0;
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 7   
+
+ 355   2                      return;
+ 356   2              }
+ 357   1      
+ 358   1              //如果可以向右转，则向右转
+ 359   1              else if (map[Car.x][Car.y] | 0xfb == 0xfb)
+ 360   1              {
+ 361   2                      CarTurn_Dir = 1;
+ 362   2                      return;
+ 363   2              }
+ 364   1      
+ 365   1      }
+ 366          //中左法则
+ 367          void SearchMode2()
+ 368          {
+ 369   1              //如果可以向前转，则向前转
+ 370   1              if (map[Car.x][Car.y] | 0xf7 == 0xf7)
+ 371   1              {
+ 372   2                      CarTurn_Dir = 0;
+ 373   2                      return;
+ 374   2              }
+ 375   1      
+ 376   1              //如果可以向左转，则向左转
+ 377   1              else if (map[Car.x][Car.y] | 0xfe == 0xfe)
+ 378   1              {
+ 379   2                      CarTurn_Dir = 3;
+ 380   2                      return;
+ 381   2              }
+ 382   1      
+ 383   1      
+ 384   1              //如果可以向右转，则向右转
+ 385   1              else if (map[Car.x][Car.y] | 0xfb == 0xfb)
+ 386   1              {
+ 387   2                      CarTurn_Dir = 1;
+ 388   2                      return;
+ 389   2              }
+ 390   1      
+ 391   1      }
+ 392          //中右法则
+ 393          void SearchMode3()
+ 394          {
+ 395   1              //如果可以向前转，则向前转
+ 396   1              if (map[Car.x][Car.y] | 0xf7 == 0xf7)
+ 397   1              {
+ 398   2                      CarTurn_Dir = 0;
+ 399   2                      return;
+ 400   2              }
+ 401   1      
+ 402   1              //如果可以向右转，则向右转
+ 403   1              else if (map[Car.x][Car.y] | 0xfb == 0xfb)
+ 404   1              {
+ 405   2                      CarTurn_Dir = 1;
+ 406   2                      return;
+ 407   2              }
+ 408   1      
+ 409   1              //如果可以向左转，则向左转
+ 410   1              else if (map[Car.x][Car.y] | 0xfe == 0xfe)
+ 411   1              {
+ 412   2                      CarTurn_Dir = 3;
+ 413   2                      return;
+ 414   2              }
+ 415   1      }
+ 416          //判断小车所在的位置区域
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 8   
+
+ 417          char CarRegional()
+ 418          {
+ 419   1              if (Car.x <= 3 && Car.y <= 3)
+ 420   1                      return 0;
+ 421   1              else if (Car.x >= 3 && Car.y > 3)
+ 422   1                      return 1;
+ 423   1              else if (Car.x <= 3 && Car.y > 3)
+ 424   1                      return 2;
+ 425   1              else 
+ 426   1                      return 3;
+ 427   1      }
+ 428          //最终的行走策略
+ 429          void Search_Mode(int Data)
+ 430          {
+ 431   1              switch (Data)
+ 432   1              {
+ 433   2              case 0: {
+ 434   3                      if (CarReal_Dir == 0) SearchMode3();
+ 435   3                      else if (CarReal_Dir == 1) SearchMode2();
+ 436   3                      else if (CarReal_Dir == 2) SearchMode0();
+ 437   3                      else if (CarReal_Dir == 3) SearchMode1();
+ 438   3              }break;
+ 439   2              case 1: {
+ 440   3                      if (CarReal_Dir == 0) SearchMode2();
+ 441   3                      else if (CarReal_Dir == 1) SearchMode1();
+ 442   3                      else if (CarReal_Dir == 2) SearchMode3();
+ 443   3                      else if (CarReal_Dir == 3) SearchMode0();
+ 444   3              }break;
+ 445   2              case 2: {
+ 446   3                      if (CarReal_Dir == 0) SearchMode1();
+ 447   3                      else if (CarReal_Dir == 1) SearchMode0();
+ 448   3                      else if (CarReal_Dir == 2) SearchMode2();
+ 449   3                      else if (CarReal_Dir == 3) SearchMode3();
+ 450   3              }break;
+ 451   2              case 3: {
+ 452   3                      if (CarReal_Dir == 0) SearchMode0();
+ 453   3                      else if (CarReal_Dir == 1) SearchMode3();
+ 454   3                      else if (CarReal_Dir == 2) SearchMode1();
+ 455   3                      else if (CarReal_Dir == 3) SearchMode2();
+ 456   3              }break;
+ 457   2              default:break;
+ 458   2              }
+ 459   1      
+ 460   1      }
+ 461          //蜂鸣器发出声音
+ 462          void PlaySound(int time)
+ 463          {
+ 464   1              while (time--)
+ 465   1              {
+ 466   2                      beep = ~beep;
+ 467   2                      Delay_ms(15);
+ 468   2              }
+ 469   1      }
+ 470          //画出地图的等高表
+ 471          void DrawHeightMap()
+ 472          {
+ 473   1              InitStack();
+ 474   1              InitMapFlag();
+ 475   1              num_StackNow = 0;//记录正在检测的队列的下标
+ 476   1              num_Stack = 0;//num_Stack记录队列的长度，并将坐标(0，0)放入队列
+ 477   1              stackX[0] = 7;
+ 478   1              stackY[0] = 7;
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 9   
+
+ 479   1              mapFlag[0][0] = 1;//将起点的高度置为1
+ 480   1              while (num_StackNow <= num_Stack)
+ 481   1              {
+ 482   2                      if (((map[stackX[num_StackNow]][stackY[num_StackNow]] % 16) | 0xf7 != 0xff) && (mapFlag[stackX[num_Stack
+             -Now]][stackY[num_StackNow] + 1] != 0))//如果正在检测的地图方块上方没有挡板,且未进入过队列
+ 483   2                      {
+ 484   3                              num_Stack++;//将正在检测的地图方块的上方的方块放入队列
+ 485   3                              stackX[num_Stack] = stackX[num_StackNow];
+ 486   3                              stackY[num_Stack] = stackY[num_StackNow] + 1;
+ 487   3                              mapFlag[stackX[num_Stack]][stackY[num_Stack]] = mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] + 1
+             -;//将这个地图方块的高度置为比正在检测的地图方块的高度+1
+ 488   3      
+ 489   3                      }
+ 490   2                      if (((map[stackX[num_StackNow]][stackY[num_StackNow]] % 16) | 0xfb != 0xff) && (mapFlag[stackX[num_Stack
+             -Now] + 1][stackY[num_StackNow]] != 0))//如果正在检测的地图方块右方没有挡板
+ 491   2                      {
+ 492   3                              num_Stack++;//将正在检测的地图方块的右方的方块放入队列
+ 493   3                              stackX[num_Stack] = stackX[num_StackNow] + 1;
+ 494   3                              stackY[num_Stack] = stackY[num_StackNow];
+ 495   3                              mapFlag[stackX[num_Stack]][stackY[num_Stack]] = mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] + 1
+             -;//将这个地图方块的高度置为比正在检测的地图方块的高度+1
+ 496   3      
+ 497   3                      }
+ 498   2                      if (((map[stackX[num_StackNow]][stackY[num_StackNow]] % 16) | 0xfd != 0xff) && (mapFlag[stackX[num_Stack
+             -Now]][stackY[num_StackNow] - 1] != 0))//如果正在检测的地图方块后方没有挡板
+ 499   2                      {
+ 500   3                              num_Stack++;//将正在检测的地图方块的后方的方块放入队列
+ 501   3                              stackX[num_Stack] = stackX[num_StackNow];
+ 502   3                              stackY[num_Stack] = stackY[num_StackNow] - 1;
+ 503   3                              mapFlag[stackX[num_Stack]][stackY[num_Stack]] = mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] + 1
+             -;//将这个地图方块的高度置为比正在检测的地图方块的高度+1
+ 504   3      
+ 505   3                      }
+ 506   2                      if (((map[stackX[num_StackNow]][stackY[num_StackNow]] % 16) | 0xfe != 0xff) && (mapFlag[stackX[num_Stack
+             -Now] - 1][stackY[num_StackNow]] != 0))//如果正在检测的地图方块左方没有挡板
+ 507   2                      {
+ 508   3                              num_Stack++;//将正在检测的地图方块的左方的方块放入队列
+ 509   3                              stackX[num_Stack] = stackX[num_StackNow] - 1;
+ 510   3                              stackY[num_Stack] = stackY[num_StackNow];
+ 511   3                              mapFlag[stackX[num_Stack]][stackY[num_Stack]] = mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] + 1
+             -;//将这个地图方块的高度置为比正在检测的地图方块的高度+1
+ 512   3      
+ 513   3                      }
+ 514   2                      num_StackNow++;
+ 515   2              }
+ 516   1      }
+ 517          //制作冲刺路线
+ 518          void MakeRushMap()
+ 519          {
+ 520   1              InitStack();
+ 521   1              num_StackNow = 0;//当前地图方块
+ 522   1              num_Stack = 0;//路线中的地图方块的个数
+ 523   1              stackX[0] = 0;
+ 524   1              stackY[0] = 0;
+ 525   1              //找到路径上的所有地图方块
+ 526   1              while (num_Stack < mapFlag[7][7])
+ 527   1              {
+ 528   2                      //检测当前栈中的地图方块上方的地图方块的高度，并判断是否满足递减1的条�
+             -�
+ 529   2                      if (mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] - mapFlag[stackX[num_StackNow]][stackY[num_Stack
+             -Now] + 1] == 1)
+ 530   2                      {
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 10  
+
+ 531   3                              num_Stack++;
+ 532   3                              stackX[num_Stack] = stackX[num_Stack - 1];
+ 533   3                              stackY[num_Stack] = stackY[num_Stack - 1] + 1;
+ 534   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] |= 0xf0;//给地图方块的高四位重新赋值
+ 535   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] &= 0x70;
+ 536   3                      }
+ 537   2                      //检测当前栈中的地图方块右方的地图方块的高度，并判断是否满足递减1的条�
+             -�
+ 538   2                      else if (mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] - mapFlag[stackX[num_StackNow] + 1][stackY[
+             -num_StackNow]] == 1)
+ 539   2                      {
+ 540   3                              num_Stack++;
+ 541   3                              stackX[num_Stack] = stackX[num_Stack - 1] + 1;
+ 542   3                              stackY[num_Stack] = stackY[num_Stack - 1];
+ 543   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] |= 0xf0;//给地图方块的高四位重新赋值
+ 544   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] &= 0xb0;
+ 545   3                      }
+ 546   2                      //检测当前栈中的地图方块下方的地图方块的高度，并判断是否满足递减1的条�
+             -�
+ 547   2                      else if (mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] - mapFlag[stackX[num_StackNow]][stackY[num_
+             -StackNow] - 1] == 1)
+ 548   2                      {
+ 549   3                              num_Stack++;
+ 550   3                              stackX[num_Stack] = stackX[num_Stack - 1];
+ 551   3                              stackY[num_Stack] = stackY[num_Stack - 1] - 1;
+ 552   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] |= 0xf0;//给地图方块的高四位重新赋值
+ 553   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] &= 0xd0;
+ 554   3                      }
+ 555   2                      //检测当前栈中的地图方块左方的地图方块的高度，并判断是否满足递减1的条�
+             -�
+ 556   2                      else if (mapFlag[stackX[num_StackNow]][stackY[num_StackNow]] - mapFlag[stackX[num_StackNow] - 1][stackY[
+             -num_StackNow]] == 1)
+ 557   2                      {
+ 558   3                              num_Stack++;
+ 559   3                              stackX[num_Stack] = stackX[num_Stack - 1] - 1;
+ 560   3                              stackY[num_Stack] = stackY[num_Stack - 1];
+ 561   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] |= 0xf0;//给地图方块的高四位重新赋值
+ 562   3                              map[stackX[num_StackNow]][stackY[num_StackNow] + 1] &= 0xe0;
+ 563   3                      }
+ 564   2              }
+ 565   1      }
+ 566          //小车的最后冲刺
+ 567          void CarRush()
+ 568          {
+ 569   1              while (!(Car.x == 0 && Car.y == 0))
+ 570   1              {
+ 571   2                      switch (map[Car.x][Car.y] / 16)
+ 572   2                      {
+ 573   3                              //假如进来时朝前,则回去时朝后
+ 574   3                      case 7:CarTurn_Dir = 2; break;
+ 575   3                              //假如进来时朝右，则回去时朝左
+ 576   3                      case 11:CarTurn_Dir = 3; break;
+ 577   3                              //假如进来时朝后，则回去时朝前
+ 578   3                      case 13:CarTurn_Dir = 0; break;
+ 579   3                              //假如进来时朝左，则回去时朝右
+ 580   3                      case 15:CarTurn_Dir = 1; break;
+ 581   3                      }
+ 582   2                      DriveCar(CarTurn_Dir);
+ 583   2              }
+ 584   1      }
+ 585          //设置T2自动重载寄存器和计数器初值
+ 586          void SetTime2(unsigned int us)
+C51 COMPILER V9.55   CAR                                                                   12/16/2020 23:07:19 PAGE 11  
+
+ 587          {
+ 588   1              TH2 = (65536 - us) / 256;
+ 589   1              RCAP2H = (65536 - us) / 256;
+ 590   1              TL2 = (65536 - us) % 256;
+ 591   1              RCAP2L = (65536 - us) % 256;
+ 592   1      }
+ 593          //定时器T2初始化
+ 594          void InitTime2()
+ 595          {
+ 596   1              EA = 1;//总中断允许
+ 597   1              ET2 = 1;
+ 598   1              SetTime2(5000);
+ 599   1              TR2 = 1;
+ 600   1      }
+ 601          //T2中断服务函数
+ 602          void time2() interrupt 5
+ 603          {
+ 604   1              ET2 = 0;
+ 605   1              SetTime2(5000);
+ 606   1              TF2 = 0;//清除T2中断标志位
+ 607   1              if (!ir)//设置num_G方向发光二极管发射红外光
+ 608   1                      MOUSE_IR_ON(num_G);
+ 609   1              else//检测num_G方向接收管返回的电平
+ 610   1              {
+ 611   2                      switch (num_G)
+ 612   2                      {
+ 613   3                      case 0: {if (irR1) irC = 0; else irC = 1; }break;
+ 614   3                      case 1: {if (irR2) irLU = 0; else irLU = 1; }break;
+ 615   3                      case 2: {if (irR3) irL = 0; else irL = 1; }break;
+ 616   3                      case 3: {if (irR4) irR = 0; else irR = 1; }break;
+ 617   3                      case 4: {if (irR5) irRU = 0; else irRU = 1; }break;
+ 618   3                      }
+ 619   2              }
+ 620   1              if (ir)//如果完成了一次发射和接收，那么开始检测下一个LED管
+ 621   1                      num_G++;
+ 622   1              if (num_G == 5)//反复低检测5个红外LED灯管
+ 623   1                      num_G = 0;
+ 624   1              ir = ~ir;//改变接收、发射状态
+ 625   1              ET2 = 1;
+ 626   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   5207    ----
+   CONSTANT SIZE    =     32    ----
+   XDATA SIZE       =    268       6
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      6    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
